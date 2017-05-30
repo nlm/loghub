@@ -1,0 +1,2 @@
+git+https://github.com/systemd/python-systemd
+git+https://github.com/easypost/syslog-rfc5424-parser
