@@ -158,7 +158,7 @@ class SyslogMessage(object):
         try:
             msg = RFC5452SyslogMessage.parse(rawdata.decode()).as_dict()
             self.id = msg.get('msgid')
-            self.message = msg.get('msg', '').strip()
+            self.message = msg.get('msg', '').rstrip(' \t\r\n\0')
             self.facility = self.facilities[msg['facility']]
             self.severity = self.severities[msg['severity']]
             self.identifier = msg.get('appname')
@@ -176,7 +176,7 @@ class SyslogMessage(object):
             (self.identifier,
              self.pid,
              self.message) = self.parse_3164_msg(msg.message.decode().strip())
-            self.message = self.message.strip()
+            self.message = self.message.rstrip(' \t\r\n\0')
             self.facility = int(msg.facility.value)
             self.severity = int(msg.severity.value)
             self.hostname = msg.hostname
