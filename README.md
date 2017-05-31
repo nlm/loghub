@@ -16,8 +16,11 @@ Destinations
   - tcp/ip
   - systemd-journald
 
-Build
------
+Install
+-------
+
+This script only uses Python3 stdlib (except for systemd-related functions),
+so it can be run as-is
 
 If you need systemd-journal support:
 
@@ -25,7 +28,10 @@ If you need systemd-journal support:
     pip install git+https://github.com/systemd/python-systemd
     pip install git+https://github.com/easypost/syslog-rfc5424-parser
 
-If you want a standalone binary with with pyinstaller:
+PyInstaller Build
+-----------------
+
+If you want to build a standalone binary with with pyinstaller:
 
     pip install pyinstaller
     pyinstaller -F loghub.py
