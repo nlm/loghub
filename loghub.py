@@ -133,21 +133,15 @@ class SyslogMessage(object):
             raise ValueError
 
     def parse_3164_msg(self, message):
-        print()
-        print(message)
-        print()
         # Full Message
         res = re.match('^([^ ]+)\[(\d+)\]: (.*)', message)
         if res:
-            print('first')
             return res.groups()
         # No PID
         res = re.match('^([^ ]+): (.*)', message)
         if res:
-            print('second')
             return (res.group(1), None, res.group(2))
         # Default
-            print('default')
         return (None, None, message)
 
     def parse(self, rawdata):
