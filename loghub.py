@@ -30,7 +30,13 @@ class SyslogHandler(socketserver.BaseRequestHandler):
         """
         handle a syslog network packet
         """
-        data = self.request.recv(8192)
+        if isinstance(self.request, socket.socket):
+            # handle request from TCPServer
+            data = self.request.recv(8192)
+        else:
+            # handle request from UDPServer
+            data = self.request[0]
+
         try:
             self.server.queue.put(data)
         except queue.Full:
