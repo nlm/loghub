@@ -8,11 +8,16 @@ Syslog Forwarding Hub
 import argparse
 import logging
 import socketserver
+import queue
 import socket
 import syslog
+import syslogmp
 import threading
-import queue
 import time
+import re
+import systemd.journal
+from syslog_rfc5424_parser import SyslogMessage as RFC5452SyslogMessage, ParseError
+import syslogmp
 
 class SyslogHandler(socketserver.BaseRequestHandler):
     """
@@ -79,14 +84,9 @@ class UDPServerThread(NetworkServerThread):
     serverclass = socketserver.UDPServer
 
 
-class JournaldThread(threading.Thread):
-    """
-    A class receiving syslog packets via a Queue
-    and emitting messages to Journald
-    """
-    logger = logging.getLogger(__name__)
+class SyslogMessage(object):
 
-    priorities = {
+    severities = {
         'emerg': syslog.LOG_EMERG,
         'alert': syslog.LOG_ALERT,
         'crit': syslog.LOG_CRIT,
@@ -118,6 +118,88 @@ class JournaldThread(threading.Thread):
         'local7': syslog.LOG_LOCAL7,
     }
 
+    id = None
+    message = None
+    facility = None
+    severity = None
+    identifier = None
+    hostname = None
+    pid = None
+
+    logger = logging.getLogger(__name__)
+
+    def __init__(self, rawdata):
+        if not self.parse(rawdata):
+            raise ValueError
+
+    def parse_3164_msg(self, message):
+        print()
+        print(message)
+        print()
+        # Full Message
+        res = re.match('^([^ ]+)\[(\d+)\]: (.*)', message)
+        if res:
+            print('first')
+            return res.groups()
+        # No PID
+        res = re.match('^([^ ]+): (.*)', message)
+        if res:
+            print('second')
+            return (res.group(1), None, res.group(2))
+        # Default
+            print('default')
+        return (None, None, message)
+
+    def parse(self, rawdata):
+        """
+        Parse any of the two types of Syslog Formats
+        """
+        # RFC 5424
+        try:
+            msg = RFC5452SyslogMessage.parse(rawdata.decode()).as_dict()
+            self.id = msg.get('msgid')
+            self.message = msg.get('msg', '').strip()
+            self.facility = self.facilities[msg['facility']]
+            self.severity = self.severities[msg['severity']]
+            self.identifier = msg.get('appname')
+            self.pid = msg.get('procid')
+            self.hostname = msg.get('hostname')
+            return True
+        except (ParseError, ValueError):
+            # log err ?
+            pass
+
+        # RFC 3164
+        try:
+            msg = syslogmp.parse(rawdata)
+            self.id = None
+            (self.identifier,
+             self.pid,
+             self.message) = self.parse_3164_msg(msg.message.decode().strip())
+            self.message = self.message.strip()
+            self.facility = int(msg.facility.value)
+            self.severity = int(msg.severity.value)
+            self.hostname = msg.hostname
+            return True
+        except (syslogmp.MessageFormatError, ValueError):
+            # log err ?
+            pass
+
+        return False
+
+    def as_dict(self):
+        return {x: getattr(self, x) for x in ['id', 'message', 'facility',
+                                              'hostname', 'severity',
+                                              'identifier', 'pid']}
+
+
+class JournaldThread(threading.Thread):
+    """
+    A class receiving syslog packets via a Queue
+    and emitting messages to Journald
+    """
+    logger = logging.getLogger(__name__)
+
     def __init__(self, queue):
         threading.Thread.__init__(self)
         self.name = self.__class__.__name__
@@ -134,23 +216,16 @@ class JournaldThread(threading.Thread):
             except queue.Empty:
                 continue
 
-            # Parsing Message
-            try:
-                message = SyslogMessage.parse(data.decode())
-            except ParseError as err:
-                self.logger.error('{}: {}'.format(self.name, err))
-                continue
-
-            msgdict = message.as_dict()
-            self.logger.debug('{}: {}'.format(self.name, msgdict))
+            msg = SyslogMessage(data)
+            self.logger.debug('{}: {}'.format(self.name, msg.as_dict()))
 
             # Send to systemd
-            systemd.journal.send(msgdict.get('msg', '').strip(),
-                                 MESSAGE_ID=msgdict.get('msgid'),
-                                 PRIORITY=self.priorities[msgdict['severity']],
-                                 SYSLOG_FACILITY=self.facilities[msgdict['facility']],
-                                 SYSLOG_IDENTIFIER=msgdict.get('appname'),
-                                 SYSLOG_PID=msgdict.get('procid'))
+            systemd.journal.send(msg.message,
+                                 MESSAGE_ID=msg.id,
+                                 PRIORITY=msg.severity,
+                                 SYSLOG_FACILITY=msg.facility,
+                                 SYSLOG_IDENTIFIER=msg.identifier,
+                                 SYSLOG_PID=msg.pid)
     def shutdown(self):
         """
         tell this thread to shutdown
@@ -362,8 +437,6 @@ def run_threads(args):
 
     # Journald
     if args.forward_journal:
-        import systemd.journal
-        from syslog_rfc5424_parser import SyslogMessage, ParseError
         jqueue = queue.Queue(args.queues_size)
         emitting_queues.append(jqueue)
         emitting_threads.append(JournaldThread(jqueue))
