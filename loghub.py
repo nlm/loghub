@@ -309,8 +309,9 @@ def queue_size(size):
     basic parser for a queue size
     """
     size = int(size)
-    if not 1 < size:
+    if not size >= 1:
         raise ValueError
+    return size
 
 
 def log_level(level):
@@ -339,7 +340,7 @@ def run_threads(args):
 
     # Receiving
     receiving_threads = []
-    receiving_queue = queue.Queue(maxsize=args.queue_size)
+    receiving_queue = queue.Queue(maxsize=args.queues_size)
 
     for host, port in args.listen_tcp:
         receiving_threads.append(TCPServerThread(host, port, receiving_queue))
@@ -351,11 +352,11 @@ def run_threads(args):
     emitting_queues = []
 
     for host, port in args.forward_udp:
-        equeue = queue.Queue(args.queue_size)
+        equeue = queue.Queue(args.queues_size)
         emitting_queues.append(equeue)
         emitting_threads.append(UDPClientThread(equeue, host, port))
     for host, port in args.forward_tcp:
-        equeue = queue.Queue(args.queue_size)
+        equeue = queue.Queue(args.queues_size)
         emitting_queues.append(equeue)
         emitting_threads.append(TCPClientThread(equeue, host, port))
 
@@ -363,7 +364,7 @@ def run_threads(args):
     if args.forward_journal:
         import systemd.journal
         from syslog_rfc5424_parser import SyslogMessage, ParseError
-        jqueue = queue.Queue(args.queue_size)
+        jqueue = queue.Queue(args.queues_size)
         emitting_queues.append(jqueue)
         emitting_threads.append(JournaldThread(jqueue))
 
@@ -419,8 +420,8 @@ def parse_arguments():
                        default=logging.INFO, help='local log level')
 
     p_adv = parser.add_argument_group('advanced options')
-    p_adv.add_argument('--queue-size', type=queue_size,
-                       default=1000, help='size of queues')
+    p_adv.add_argument('--queues-size', type=queue_size,
+                       default=1000, help='max size of queues')
 
     args = parser.parse_args()
 
