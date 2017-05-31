@@ -3,6 +3,10 @@ loghub
 
 Syslog Forwarding Hub
 
+Handles RFC5424 and RFC3164 messages
+
+*Warning*: Probably not production-ready yet. Use at your own risk.
+
 Sources
 -------
 
@@ -27,6 +31,7 @@ If you need systemd-journal support:
     apt-get install libsystemd-dev
     pip install git+https://github.com/systemd/python-systemd
     pip install git+https://github.com/easypost/syslog-rfc5424-parser
+    pip install syslogmp
 
 PyInstaller Build
 -----------------
