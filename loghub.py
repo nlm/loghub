@@ -16,8 +16,10 @@ import threading
 import time
 import re
 import systemd.journal
-from syslog_rfc5424_parser import SyslogMessage as RFC5452SyslogMessage, ParseError
+from syslog_rfc5424_parser import SyslogMessage as RFC5452SyslogMessage
+from syslog_rfc5424_parser import ParseError
 import syslogmp
+
 
 class SyslogHandler(socketserver.BaseRequestHandler):
     """
@@ -91,6 +93,10 @@ class UDPServerThread(NetworkServerThread):
 
 
 class SyslogMessage(object):
+    """
+    A class to have a unique object layer for RFC 5424 and RFC 3164
+    syslog messages
+    """
 
     severities = {
         'emerg': syslog.LOG_EMERG,
@@ -137,8 +143,14 @@ class SyslogMessage(object):
     def __init__(self, rawdata):
         if not self.parse(rawdata):
             raise ValueError
+        self.rawdata = rawdata
 
     def parse_3164_msg(self, message):
+        """
+        Parse an RFC 3164 message and try to extract
+        the (identifier, pid, message) tuple.
+        Any can be None, except message
+        """
         # Full Message
         res = re.match('^([^ ]+)\[(\d+)\]: (.*)', message)
         if res:
@@ -153,6 +165,7 @@ class SyslogMessage(object):
     def parse(self, rawdata):
         """
         Parse any of the two types of Syslog Formats
+        and stores the result in this object
         """
         # RFC 5424
         try:
@@ -188,6 +201,9 @@ class SyslogMessage(object):
         return False
 
     def as_dict(self):
+        """
+        Returns a dict of the syslog-related attributes of this object
+        """
         return {x: getattr(self, x) for x in ['id', 'message', 'facility',
                                               'hostname', 'severity',
                                               'identifier', 'pid']}
@@ -216,13 +232,15 @@ class JournaldThread(threading.Thread):
             except queue.Empty:
                 continue
 
+            # Parse Message
             try:
                 msg = SyslogMessage(data)
-                self.logger.debug('{}: {}'.format(self.name, msg.as_dict()))
             except Exception as err:
                 self.logger.warning('{}: ignoring message: {}'
                                     .format(self.name, err))
                 continue
+
+            self.logger.debug('{}: {}'.format(self.name, msg.as_dict()))
 
             # Send to systemd
             systemd.journal.send(msg.message,
@@ -231,6 +249,7 @@ class JournaldThread(threading.Thread):
                                  SYSLOG_FACILITY=msg.facility,
                                  SYSLOG_IDENTIFIER=msg.identifier,
                                  SYSLOG_PID=msg.pid)
+
     def shutdown(self):
         """
         tell this thread to shutdown
@@ -454,18 +473,25 @@ def run_threads(args):
         logger.debug('starting thread {}'.format(thread.name))
         thread.start()
 
-    logger.debug('joining threads')
+    logger.debug('watching threads')
     try:
-        for thread in receiving_threads + [datahub_thread] + emitting_threads:
-            thread.join()
+        while True:
+            for thread in receiving_threads + [datahub_thread] + emitting_threads:
+                if not thread.is_alive():
+                    logger.debug('thread {} died'.format(thread.name))
+                    break
+            time.sleep(1)
     except KeyboardInterrupt:
-        logger.info('loghub stopping')
+        logger.info('keyboard interrupt received')
     except Exception:
         raise
 
+    logger.info('loghub stopping')
+    logger.debug('stopping threads')
     for thread in receiving_threads + [datahub_thread] + emitting_threads:
-        logger.debug('stopping thread {}'.format(thread.name))
-        thread.shutdown()
+        if thread.is_alive():
+            logger.debug('stopping thread {}'.format(thread.name))
+            thread.shutdown()
 
 
 def parse_arguments():
