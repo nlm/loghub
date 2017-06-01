@@ -520,9 +520,9 @@ def parse_arguments():
                            help='forward to tcp [HOST]:PORT', default=[])
 
     p_journal = parser.add_argument_group('systemd journal')
-    p_journal.add_argument('--forward-journal', '-j', action='store_true',
+    p_journal.add_argument('--forward-journal', '-J', action='store_true',
                            default=False,
-                           help='append messages to systemd journal')
+                           help='forward messages to local systemd journal')
 
     p_log = parser.add_argument_group('local logging')
     p_log.add_argument('--log-file', '-f', help='log to file')
