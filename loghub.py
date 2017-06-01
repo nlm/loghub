@@ -34,7 +34,7 @@ class SyslogHandler(socketserver.BaseRequestHandler):
         """
         if isinstance(self.request, socket.socket):
             # handle request from TCPServer
-            data = self.request.recv(8192)
+            data = self.request.recv(4096)
         else:
             # handle request from UDPServer
             data = self.request[0]
@@ -184,6 +184,11 @@ class SyslogMessage(object):
 
         # RFC 3164
         try:
+            if len(rawdata) > 1024:
+                self.logger.warning('truncating message ({} > 1024)'
+                                    .format(len(rawdata)))
+                rawdata = rawdata[:1024]
+            # truncate to 1024
             msg = syslogmp.parse(rawdata)
             self.id = None
             (self.identifier,
@@ -194,7 +199,7 @@ class SyslogMessage(object):
             self.severity = int(msg.severity.value)
             self.hostname = msg.hostname
             return True
-        except (syslogmp.MessageFormatError, ValueError):
+        except (syslogmp.parser.MessageFormatError, ValueError):
             # log err ?
             pass
 
@@ -298,12 +303,13 @@ class TCPClientThread(threading.Thread):
                 continue
             try:
                 data = self.queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
                 self.logger.debug('{} sending {} bytes to {}:{}'
                                   .format(self.name, len(data),
                                           self.host, self.port))
                 sock.send(data)
-            except queue.Empty:
-                continue
             except BrokenPipeError:
                 sock.close()
                 sock = None
@@ -338,12 +344,12 @@ class UDPClientThread(threading.Thread):
         while not self.must_shutdown:
             try:
                 data = self.queue.get(timeout=1)
-                logger.debug('{} sending {} bytes to {}:{}'
-                             .format(self.name, len(data),
-                                     self.host, self.port))
-                sock.sendto(data, (self.host, self.port))
             except queue.Empty:
                 continue
+            logger.debug('{} sending {} bytes to {}:{}'
+                         .format(self.name, len(data),
+                                 self.host, self.port))
+            sock.sendto(data, (self.host, self.port))
 
     def shutdown(self):
         """
