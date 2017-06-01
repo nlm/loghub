@@ -15,6 +15,7 @@ import syslogmp
 import threading
 import time
 import re
+import sys
 import systemd.journal
 from syslog_rfc5424_parser import SyslogMessage as RFC5452SyslogMessage
 from syslog_rfc5424_parser import ParseError
@@ -541,6 +542,11 @@ def parse_arguments():
     if not args.forward_journal and not args.forward_udp:
         parser.error('nothing to send to')
 
+    if args.log_file or sys.stdout.isatty():
+        args.log_format='[%(asctime)s] %(levelname)s: %(message)s'
+    else:
+        args.log_format='%(message)s'
+
     return args
 
 
@@ -548,7 +554,7 @@ def main():
     args = parse_arguments()
     logger = logging.getLogger(__name__)
     logging.basicConfig(level=args.log_level,
-                        format='[%(asctime)s] %(levelname)s: %(message)s',
+                        format=args.log_format,
                         datefmt='',
                         filename=args.log_file,
                         filemode='a')
