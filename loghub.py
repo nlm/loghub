@@ -216,8 +216,13 @@ class JournaldThread(threading.Thread):
             except queue.Empty:
                 continue
 
-            msg = SyslogMessage(data)
-            self.logger.debug('{}: {}'.format(self.name, msg.as_dict()))
+            try:
+                msg = SyslogMessage(data)
+                self.logger.debug('{}: {}'.format(self.name, msg.as_dict()))
+            except Exception as err:
+                self.logger.warning('{}: ignoring message: {}'
+                                    .format(self.name, err))
+                continue
 
             # Send to systemd
             systemd.journal.send(msg.message,
