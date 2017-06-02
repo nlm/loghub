@@ -16,6 +16,7 @@ import threading
 import time
 import re
 import sys
+import json
 from syslog_rfc5424_parser import SyslogMessage as RFC5452SyslogMessage
 from syslog_rfc5424_parser import ParseError
 import syslogmp
@@ -147,7 +148,9 @@ class SyslogMessage(object):
     id = None
     message = None
     facility = None
+    facility_name = None
     severity = None
+    severity_name = None
     identifier = None
     hostname = None
     pid = None
@@ -193,7 +196,9 @@ class SyslogMessage(object):
             self.id = msg.get('msgid')
             self.message = msg.get('msg', '').rstrip(' \t\r\n\0')
             self.facility = self.facilities[msg['facility']]
+            self.facility_name = msg['facility']
             self.severity = self.severities[msg['severity']]
+            self.severity_name = msg['severity']
             self.identifier = msg.get('appname')
             self.pid = msg.get('procid')
             self.hostname = msg.get('hostname')
@@ -216,7 +221,9 @@ class SyslogMessage(object):
              self.message) = self.parse_3164_msg(msg.message.decode().strip())
             self.message = self.message.rstrip(' \t\r\n\0')
             self.facility = int(msg.facility.value)
+            self.facility_name = str(msg.facility).lower().split('.')[-1]
             self.severity = int(msg.severity.value)
+            self.severity_name = str(msg.severity).lower().split('.')[-1]
             self.hostname = msg.hostname
             return True
         except (syslogmp.parser.MessageFormatError, ValueError):
@@ -231,6 +238,7 @@ class SyslogMessage(object):
         """
         return {x: getattr(self, x) for x in ['id', 'message', 'facility',
                                               'hostname', 'severity',
+                                              'facility_name', 'severity_name',
                                               'identifier', 'pid']}
 
 
@@ -385,20 +393,27 @@ class UDPClientThread(LoopThread):
                                   self.host, self.port))
         self.sock.sendto(message.rawdata, (self.host, self.port))
 
-
-class FileAppendThread(LoopThread):
+#from datetime import datetime
+class FileWriteThread(LoopThread):
     """
     A class for appending messages to a file
     """
 
-    def __init__(self, equeue, filename):
+    def __init__(self, equeue, fd_or_filename):
         LoopThread.__init__(self)
-        self.name = '{}({})'.format(self.__class__.__name__, filename)
+        if isinstance(fd_or_filename, str):
+            self.name = '{}({})'.format(self.__class__.__name__, fd_or_filename)
+        else:
+            self.name = '{}({})'.format(self.__class__.__name__,
+                                        fd_or_filename.name)
         self.queue = equeue
-        self.filename = filename
+        self.fd_or_filename = fd_or_filename
 
     def setup(self):
-        self.fd = open(self.filename, 'a')
+        if isinstance(self.fd_or_filename, str):
+            self.fd = open(self.fd_or_filename, 'a')
+        else:
+            self.fd = self.fd_or_filename
 
     def step(self):
         try:
@@ -406,10 +421,14 @@ class FileAppendThread(LoopThread):
         except queue.Empty:
             return
 
-        print(message.as_dict(), file=self.fd)
+        print(json.dumps(message.as_dict()), file=self.fd)
+        #print('[{ts}] {message.facility_name}.{message.severity_name}'
+        #      ' {message.identifier}[{message.pid}]: {message.message}'
+        #      .format(message=message, ts=datetime.now()))
 
     def cleanup(self):
-        self.fd.close()
+        if isinstance(self.fd_or_filename, str):
+            self.fd.close()
 
 
 class DataHubThread(LoopThread):
@@ -443,7 +462,8 @@ class DataHubThread(LoopThread):
                                 .format(self.name, err))
             return
 
-        self.logger.debug('{}: {}'.format(self.name, message.as_dict()))
+        self.logger.debug('{}: {}'.format(self.name,
+                                          json.dumps(message.as_dict())))
 
         # Send to active forwarders
         for equeue in self.emitting_queues:
@@ -527,9 +547,29 @@ def run_threads(args):
 
     # Journald
     if args.forward_journal:
-        jqueue = queue.Queue(args.queues_size)
-        emitting_queues.append(jqueue)
-        emitting_threads.append(JournaldThread(jqueue))
+        equeue = queue.Queue(args.queues_size)
+        emitting_queues.append(equeue)
+        emitting_threads.append(JournaldThread(equeue))
+
+    # File
+    for fd in args.forward_file:
+        equeue = queue.Queue(args.queues_size)
+        emitting_queues.append(equeue)
+        emitting_threads.append(FileWriteThread(equeue, fd))
+
+    # Stdout
+    if args.forward_stdout:
+        equeue = queue.Queue(args.queues_size)
+        emitting_queues.append(equeue)
+        emitting_threads.append(FileWriteThread(equeue, sys.stdout))
+
+    if len(receiving_threads) == 0:
+        logger.error('nothing to listen on')
+        return 1
+
+    if len(emitting_threads) == 0:
+        logger.error('nothing to forward to')
+        return 1
 
     # Data Exchange Hub
     datahub_thread = DataHubThread(receiving_queue, emitting_queues)
@@ -592,9 +632,13 @@ def parse_arguments():
     p_forward.add_argument('--forward-journal', '-J', action='store_true',
                            default=False,
                            help='forward messages to local systemd journal')
+    p_forward.add_argument('--forward-file', '-F', action='append', default=[],
+                           type=argparse.FileType('a'), help='append to file')
+    p_forward.add_argument('--forward-stdout', '-S', action='store_true',
+                           default=False, help='dump on stdout')
 
     p_log = parser.add_argument_group('local logging')
-    p_log.add_argument('--log-file', '-f', help='log to file')
+    p_log.add_argument('--log-file', help='log to file')
     p_log.add_argument('--log-level', '-l', type=log_level,
                        default=logging.INFO, help='local log level')
 
@@ -604,11 +648,11 @@ def parse_arguments():
 
     args = parser.parse_args()
 
-    if not args.listen_tcp and not args.listen_udp:
-        parser.error('nothing to listen on')
-
-    if not args.forward_journal and not args.forward_udp:
-        parser.error('nothing to send to')
+#    if not args.listen_tcp and not args.listen_udp:
+#        parser.error('nothing to listen on')
+#
+#    if not args.forward_journal and not args.forward_udp:
+#        parser.error('nothing to send to')
 
     if args.log_file or sys.stdout.isatty():
         args.log_format='[%(asctime)s] %(levelname)s: %(message)s'
@@ -631,4 +675,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
