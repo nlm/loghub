@@ -60,6 +60,9 @@ class LogHubThread(threading.Thread):
     def shutdown(self):
         self.logger.error('{}: no shutdown function defined'.format(self.name))
 
+    def is_setup(self):
+        return True
+
 
 class NetworkServerThread(LogHubThread):
 
@@ -76,6 +79,7 @@ class NetworkServerThread(LogHubThread):
         """
         start this thread
         """
+        self.logger.debug('{} running'.format(self.name))
         self.server.allow_reuse_address = True
         self.server.serve_forever()
 
@@ -235,6 +239,7 @@ class LoopThread(LogHubThread):
     def __init__(self):
         LogHubThread.__init__(self)
         self._shutdown = False
+        self._issetup = False
 
     def shutdown(self):
         self._shutdown = True
@@ -243,8 +248,12 @@ class LoopThread(LogHubThread):
     def must_shutdown(self):
         return self._shutdown
 
+    def is_setup(self):
+        return self._issetup
+
     def step(self):
-        self.logger.error("{}: no 'step' function defined".format(self.name))
+        self.logger.error('{}: no "step" function defined, sleeping'
+                          .format(self.name))
         time.sleep(1)
 
     def run(self, delay=0):
@@ -257,7 +266,9 @@ class LoopThread(LogHubThread):
         """
         if callable(getattr(self, 'setup', None)):
             self.setup()
+        self._issetup = True
 
+        self.logger.debug('{} running'.format(self.name))
         while not self._shutdown:
             self.step()
             time.sleep(delay)
@@ -527,6 +538,17 @@ def run_threads(args):
     for thread in emitting_threads + [datahub_thread] + receiving_threads:
         logger.debug('starting thread {}'.format(thread.name))
         thread.start()
+
+    logger.debug('waiting for the threads to be ready')
+    while True:
+        all_ready = True
+        for thread in receiving_threads + [datahub_thread] + emitting_threads:
+            if not thread.is_setup:
+                all_ready = False
+                break
+        if all_ready:
+            break
+        time.sleep(1)
 
     logger.debug('watching threads')
     try:
